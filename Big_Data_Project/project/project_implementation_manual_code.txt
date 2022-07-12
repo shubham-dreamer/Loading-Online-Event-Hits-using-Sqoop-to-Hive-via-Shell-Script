@@ -1,0 +1,255 @@
+`````````````````````````````````````````````````Manual Work`````````````````````````````````````````````````````````````
+------------------------------------------------------
+vi imp_data_to_sql.sh
+
+DATABASE NAME: project1
+
+TABLE NAME : dummy_data1
+
+
+Starting new project:
+
+*********************data load from datasets to Sql database:
+
+project_sql ---> dummy_data
+
+mysql --local-infile=1 -uroot -p
+
+SET GLOBAL local_infile=1;
+
+create table dummy_data(
+	custid integer(10) primary key not null,
+	username varchar(30),
+	quote_count varchar(30),
+	ip varchar(30),
+	entry_time varchar(30),
+	prp_1 varchar(30),
+	prp_2 varchar(30),
+	prp_3 varchar(30),
+	ms varchar(30),
+	http_type varchar(30),
+	purchase_category varchar(30),
+	total_count varchar(30),
+	purchase_sub_category varchar(30),
+	http_info varchar(30),
+	status_code integer(10),
+	curr_time bigint
+);
+/home/saif/Desktop/cohort_f11/datasets
+
+load data local infile '/home/saif/Desktop/cohort_f11/datasets/Day_1.csv' into table dummy_data fields terminated by ',';
+load data local infile '/home/saif/Desktop/cohort_f11/datasets/Day_2.csv' into table dummy_data fields terminated by ',';
+load data local infile '/home/saif/Desktop/cohort_f11/datasets/Day_3.csv' into table dummy_data fields terminated by ',';
+
+
+
+!!!ERROR:*****To remove error  like: safe update mode and you tried to update a table without a WHERE that uses a KEY column To disable safe mode******
+
+RESOLVE: set sql_safe_updates = 0;
+
+
+update dummy_data set curr_time = CURRENT_TIMESTAMP() + 1 where curr_time IS NULL;
+
+
+-----------------------------------------------------------------------------
+++++++++++++++++++++++++ Loading of DATA+++++++++++++++++++++++++++++++++
+
+======================= Loading of data into HDFS =============================
+
+hdfs dfs -rm -r HFS/Output/project1----> to remove directory if existing
+
+sqoop import \
+--connect jdbc:mysql://localhost:3306/project1?useSSL=False \
+--table dummy_data \
+--username root --password Welcome@123 \
+--target-dir HFS/Output/project1
+
+To get the list of jobs in sqoop
+	sqoop job --list
+To get last value
+	--show project_job
+To delete job
+	sqoop job --delete project_job
+To execute
+	sqoop job --exec project_job
+
+----------------------------------------------------------------------------------
+
+******************Loading Data from HDFS TO HIVE******************************
+
+
+create database project_hive;
+
+use project_hive;
+
+create table dummy_data (
+custid int,
+username string,
+quote_count string,
+ip string,
+entry_time string,
+prp_1 string,
+prp_2 string,
+prp_3 string,
+ms string,
+http_type string,
+purchase_category string,
+total_count string,
+purchase_sub_category string,
+http_info string,
+status_code int,
+curr_time BIGINT
+)
+row format delimited fields terminated by ',';
+
+
+load data inpath 'HFS/Output/project1/' into table dummy_data;
+------------------------------------------------------------------------------------------
+****************************Now partition Table*************************************
+
+
+set hive.exec.dynamic.partition=true;    
+set hive.exec.dynamic.partition.mode=nonstrict;
+
+create external table dummy_data_ext(
+custid int,
+username string,
+quote_count string,
+ip string,
+prp_1 string,
+prp_2 string,
+prp_3 string,
+ms string,
+http_type string,
+purchase_category string,
+total_count string,
+purchase_sub_category string,
+http_info string,
+status_code int,
+curr_time BIGINT
+)
+partitioned by(year string,month string)
+row format delimited fields terminated by ',';
+
+
+insert overwrite table dummy_data_ext partition (year, month) select custid,username,quote_count,ip,prp_1,prp_2,prp_3,ms,http_type,
+purchase_category,total_count,purchase_sub_category,http_info,status_code,curr_time,
+cast(year(from_unixtime(unix_timestamp(entry_time , 'dd/MMM/yyyy'))) as string) as year, 
+cast(month(from_unixtime(unix_timestamp(entry_time , 'dd/MMM/yyyy'))) as string) as month from dummy_data;
+
+
+select * from dummy_data_ext limit 5;
+
+hdfs dfs -ls /user/hive/warehouse/project_hive.db
+hdfs dfs -ls /user/hive/warehouse/project_hive.db/dummy_data_ext
+
+-------------------------------------------------------SCD LOGIC IMPLEMENTATION-------------------------------------------------
+------------SCD1--> it maintains your current Data, here data loss is the limitations------------------
+
+insert overwrite table dummy_data_ext partition (year, month) select a.custid,a.username,a.quote_count,a.ip,a.prp_1,a.prp_2,a.prp_3,a.ms,a.http_type,
+a.purchase_category,a.total_count,a.purchase_sub_category,a.http_info,a.status_code,a.curr_time,
+cast(year(from_unixtime(unix_timestamp(entry_time , 'dd/MMM/yyyy'))) as string) as year, 
+cast(month(from_unixtime(unix_timestamp(entry_time , 'dd/MMM/yyyy'))) as string) as month from dummy_data a
+join 
+dummy_data_ext b
+on a.custid=b.custid
+union
+select a.custid,a.username,a.quote_count,a.ip,a.prp_1,a.prp_2,a.prp_3,a.ms,a.http_type,
+a.purchase_category,a.total_count,a.purchase_sub_category,a.http_info,a.status_code,a.curr_time,
+cast(year(from_unixtime(unix_timestamp(entry_time , 'dd/MMM/yyyy'))) as string) as year, 
+cast(month(from_unixtime(unix_timestamp(entry_time , 'dd/MMM/yyyy'))) as string) as month
+from dummy_data a
+left join 
+dummy_data_ext b
+on a.custid=b.custid
+where b.custid is null
+union
+select b.custid,b.username,b.quote_count,b.ip,b.prp_1,b.prp_2,b.prp_3,b.ms,b.http_type,
+b.purchase_category,b.total_count,b.purchase_sub_category,b.http_info,b.status_code,b.curr_time,
+cast(year(from_unixtime(unix_timestamp(entry_time , 'dd/MMM/yyyy'))) as string) as year, 
+cast(month(from_unixtime(unix_timestamp(entry_time , 'dd/MMM/yyyy'))) as string) as month
+from dummy_data a
+right join 
+dummy_data_ext b
+on a.custid=b.custid
+where a.custid is null
+;
+
+---------------------------------------------------------
+*******************creating alternate/staging table*********************
+
+
+create table project_inter (
+custid int,
+username string,
+quote_count string,
+ip string,
+entry_time string,
+prp_1 string,
+prp_2 string,
+prp_3 string,
+ms string,
+http_type string,
+purchase_category string,
+total_count string,
+purchase_sub_category string,
+http_info string,
+status_code int,
+year string,
+month string,
+curr_time BIGINT
+)
+row format delimited fields terminated by ',';
+
+insert into table project_inter select *
+from dummy_data_ext t1 join
+     (select max(curr_time) as max_date_time
+      from dummy_data_ext
+     ) tt1
+     on tt1.max_date_time = t1.curr_time;
+
+==========================================================Creating table and Exporting======================================================================
+
+
+
+create table project_sql_exp (
+	custid integer(10),
+	username varchar(30),
+	quote_count varchar(30),
+	ip varchar(30),
+	entry_time varchar(30),
+	prp_1 varchar(30),
+	prp_2 varchar(30),
+	prp_3 varchar(30),
+	ms varchar(30),
+	http_type varchar(30),
+	purchase_category varchar(30),
+	total_count varchar(30),
+	purchase_sub_category varchar(30),
+	http_info varchar(30),
+	status_code integer(10),
+	year varchar(100),
+	month varchar(100),
+	curr_time bigint
+);
+
+
+
+
+
+sqoop export --connect jdbc:mysql://localhost:3306/project1?useSSL=False \
+--table project_sql_exp \
+--username root --password Welcome@123 \
+--export-dir /user/hive/warehouse/project_hive.db/project_inter \
+--m 1 \
+-- driver com.mysql.jdbc.Driver \
+--input-fields-terminated-by ',';
+
+
+
+
+
+
+
+
+
